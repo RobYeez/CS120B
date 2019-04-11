@@ -1,0 +1,169 @@
+/*	Partner(s) Name & E-mail: Francisco Munoz	fmuno003@ucr.edu
+ *	Lab Section: 022
+ *	Assignment: Lab #7  Exercise #4
+ *	Exercise Description: 
+ *	
+ *	I acknowledge all content contained herein, excluding template or example
+ *	code, is my own original work.
+ */
+#include <avr/io.h>
+
+
+unsigned char i = 0;
+
+#define SET_BIT(p,i) (p |= (1 << i))
+#define CLR_BIT(p,i) (p &= ~(1 << i))
+#define GET_BIT(p,i) (p & (1 << i))
+#define SHIFT_REG PORTC
+
+void transmit_data(unsigned char data){
+	unsigned char tmp = data;
+	
+	SET_BIT(SHIFT_REG, 3);				//set SRCLR high
+	CLR_BIT(SHIFT_REG, 1);				//set RCLK low
+	
+	for(i = 0; i < 8; i++){
+		CLR_BIT(SHIFT_REG, 2);			//set SRCLK low
+		tmp = GET_BIT(data, i);
+		if(tmp)
+		SET_BIT(SHIFT_REG, 0);	//set SER to data to be transmitted
+		else
+		CLR_BIT(SHIFT_REG, 0);
+		SET_BIT(SHIFT_REG, 2);			//set SRCLK high
+	}
+	
+	SET_BIT(SHIFT_REG, 1);				//set RCLK high
+}
+
+
+
+//FreeRTOS include files
+#include "FreeRTOS.h"
+#include "task.h"
+#include "croutine.h"
+
+unsigned char pattern = 0x01;
+unsigned char row = 0x10;
+unsigned short joystick = 0;
+unsigned short temp = 0;
+enum LRStates{leftRight, upDown} state;
+enum LEDMatrixStates{display} LEDstate;
+
+
+// Pins on PORTA are used as input for A2D conversion
+// The Default Channel is 0 (PA0)
+// The value of pinNum determines the pin on PORTA used for A2D conversion
+// Valid values range between 0 and 7, where the value represents the desired pin for A2D conversion
+void Set_A2D_Pin(unsigned char pinNum)
+{
+	ADMUX = (pinNum <= 0x07) ? pinNum : ADMUX;
+	// Allow channel to stabilize
+	static unsigned char i = 0;
+	for(i = 0; i < 15; ++i){asm("nop");}
+}
+void A2D_init()
+{
+	ADCSRA |= (1 << ADEN) | (1 << ADSC) | (1 << ADATE);
+	//ADEN: Enables analog-to-digital conversion
+	//ADSC: Starts analog-to-digital conversion
+	//ADATE: Enables auto-triggering, allowing for constant analog to digital conversions.
+}
+void convert()
+{
+	ADCSRA |=(1<<ADSC);//start ADC conversion
+	while ( !(ADCSRA & (1<<ADIF)));//wait till ADC conversion
+	
+}
+void LEDMatrix_Tick()
+{
+	switch(LEDstate)
+	{
+		case display:
+			break;
+		default:
+			break;
+	}
+	switch(LEDstate)
+	{
+		case display:
+
+			PORTD = pattern;
+			transmit_data(~row);
+			break;
+		default:
+			break;
+	}
+}
+void LR_Tick()
+{
+	switch(state)
+	{
+		case leftRight:
+			Set_A2D_Pin(0x00);
+			convert();
+			joystick = ADC;
+			if(joystick < 350)
+			{
+				if(pattern != 0x01)
+					pattern = pattern >> 1;
+			}
+			else if(joystick > 700)
+			{
+				if(pattern != 0x80)
+					pattern = pattern << 1 | 0x01;
+			}
+			state = upDown;
+			break;
+		case upDown:
+			Set_A2D_Pin(0x01);
+			convert();
+			temp = ADC;
+			if(temp < 350)
+			{
+				if(row != 0x10)
+					row = row << 1 | 0x01;
+			}
+			else if(temp > 700)
+			{
+				if(row != 0x01)
+					row = row >> 1;
+			}
+			state = leftRight;
+			break;
+		default:
+			break;
+	}
+}
+void LEDMatrix_Task()
+{
+	LEDstate = display;
+	for(;;)
+	{
+		LEDMatrix_Tick();
+		vTaskDelay(250);
+	}
+}
+void LR_Task()
+{
+	state = leftRight;
+	for(;;)
+	{
+		LR_Tick();
+		vTaskDelay(250);
+	}
+}
+void StartShiftPulse(unsigned portBASE_TYPE Priority)
+{
+	xTaskCreate(LR_Task, (signed portCHAR *) "LR_Task", configMINIMAL_STACK_SIZE, NULL, Priority, NULL);
+	xTaskCreate(LEDMatrix_Task, (signed portCHAR *) "LEDMatrix_Task", configMINIMAL_STACK_SIZE, NULL, Priority, NULL);
+}
+int main(void)
+{
+	DDRA = 0x00; PORTA = 0xFF;
+	DDRC = 0xFF; PORTC = 0x00;
+	DDRD = 0xFF; PORTD = 0x00;
+	A2D_init();
+	StartShiftPulse(1);
+	vTaskStartScheduler();
+	return 0;
+}
